@@ -50,7 +50,7 @@ export const COLORS = {
 };
 
 export const APP_NAME = 'GasSafer';
-export const USSD_CODE = '*384*48771#';
+export const USSD_CODE = '*384*49718#';
 
 export const EMERGENCY_CONTACTS = [
   { label: 'Primary contact', number: '+250780838274', tel: 'tel:+250780838274' },
