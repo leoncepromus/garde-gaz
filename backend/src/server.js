@@ -35,11 +35,24 @@ app.use(express.urlencoded({ extended: true }));
 const docsDir = [path.join(__dirname, '../docs'), path.join(__dirname, '../../docs')]
   .find((dir) => fs.existsSync(path.join(dir, 'swagger.html')))
   ?? path.join(__dirname, '../docs');
+const swaggerHtml = path.resolve(docsDir, 'swagger.html');
+const openApiYaml = path.resolve(docsDir, 'openapi.yaml');
+
 app.get('/api/docs', (_req, res) => {
-  res.sendFile(path.join(docsDir, 'swagger.html'));
+  if (!fs.existsSync(swaggerHtml)) {
+    return res.status(503).json({
+      error: 'API docs not bundled on this server',
+      openapi: '/api/openapi.yaml',
+      health: '/health',
+    });
+  }
+  res.sendFile(swaggerHtml);
 });
 app.get('/api/openapi.yaml', (_req, res) => {
-  res.sendFile(path.join(docsDir, 'openapi.yaml'));
+  if (!fs.existsSync(openApiYaml)) {
+    return res.status(404).json({ error: 'openapi.yaml not found' });
+  }
+  res.sendFile(openApiYaml);
 });
 
 // ── Sensor API key (NodeMCU → backend) ────────────────────────────────────
