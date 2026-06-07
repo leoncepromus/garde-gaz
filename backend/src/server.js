@@ -27,6 +27,7 @@ const { startWatcher } = require('./alerts');
 const { sendVoiceCall, sendSMS, sendSafeNotification } = require('./twilio');
 
 const app = express();
+app.set('trust proxy', 1);
 app.use(cors());
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
@@ -53,7 +54,12 @@ app.get('/api/openapi.yaml', (req, res) => {
     return res.status(404).json({ error: 'openapi.yaml not found' });
   }
 
-  const requestBase = `${req.protocol}://${req.get('host')}`;
+  let protocol = req.protocol;
+  const host = req.get('host') || '';
+  if (protocol === 'http' && /\.onrender\.com$/i.test(host)) {
+    protocol = 'https';
+  }
+  const requestBase = `${protocol}://${host}`;
 
   let yaml = fs.readFileSync(openApiYaml, 'utf8');
   yaml = yaml
