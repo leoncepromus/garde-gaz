@@ -14,13 +14,13 @@ info:
     - `POST /api/sensor` accepts optional header `X-Sensor-Key` when `SENSOR_API_KEY` is set in `.env`
   version: 1.0.0
   contact:
-    name: GasSafer Team — University of Rwanda
+    name: GasSafer Team — Fyp Team z
 
 servers:
   - url: http://localhost:3000
     description: Local development
   - url: https://YOUR_PUBLIC_URL
-    description: Production (auto-set to your Render/Railway URL when served)
+    description: Production 
 
 tags:
   - name: Health
