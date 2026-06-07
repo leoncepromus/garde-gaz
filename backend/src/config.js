@@ -1,4 +1,9 @@
-require('dotenv').config({ path: require('path').join(__dirname, '../../.env') });
+const path = require('path');
+const dotenv = require('dotenv');
+
+[path.join(__dirname, '../../.env'), path.join(__dirname, '../.env')].forEach((envPath) => {
+  dotenv.config({ path: envPath });
+});
 
 module.exports = {
   port: process.env.PORT || 3000,

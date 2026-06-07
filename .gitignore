@@ -13,6 +13,8 @@ backend/node_modules/
 .expo/
 dist/
 web-build/
+android/
+ios/
 
 # Build artifacts
 *.jks

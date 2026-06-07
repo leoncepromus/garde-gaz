@@ -5,13 +5,12 @@
  * Docs:   http://localhost:3000/api/docs
  */
 
-require('dotenv').config({ path: require('path').join(__dirname, '../../.env') });
-
+const config = require('./config');
 const express = require('express');
 const cors = require('cors');
 const path = require('path');
+const fs = require('fs');
 
-const config = require('./config');
 const {
   initFirebase,
   getCurrentGasLevel,
@@ -33,7 +32,9 @@ app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
 
 // ── OpenAPI / Swagger (CDN UI, no extra npm deps) ─────────────────────────
-const docsDir = path.join(__dirname, '../../docs');
+const docsDir = [path.join(__dirname, '../docs'), path.join(__dirname, '../../docs')]
+  .find((dir) => fs.existsSync(path.join(dir, 'swagger.html')))
+  ?? path.join(__dirname, '../docs');
 app.get('/api/docs', (_req, res) => {
   res.sendFile(path.join(docsDir, 'swagger.html'));
 });
