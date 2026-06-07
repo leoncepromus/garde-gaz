@@ -20,7 +20,7 @@ servers:
   - url: http://localhost:3000
     description: Local development
   - url: https://YOUR_PUBLIC_URL
-    description: Production (ngrok, Railway, Render, etc.)
+    description: Production (auto-set to your Render/Railway URL when served)
 
 tags:
   - name: Health

@@ -48,11 +48,19 @@ app.get('/api/docs', (_req, res) => {
   }
   res.sendFile(swaggerHtml);
 });
-app.get('/api/openapi.yaml', (_req, res) => {
+app.get('/api/openapi.yaml', (req, res) => {
   if (!fs.existsSync(openApiYaml)) {
     return res.status(404).json({ error: 'openapi.yaml not found' });
   }
-  res.sendFile(openApiYaml);
+
+  const requestBase = `${req.protocol}://${req.get('host')}`;
+
+  let yaml = fs.readFileSync(openApiYaml, 'utf8');
+  yaml = yaml
+    .replace('https://YOUR_PUBLIC_URL', requestBase)
+    .replace('http://YOUR_PUBLIC_URL', requestBase);
+
+  res.type('text/yaml').send(yaml);
 });
 
 // ── Sensor API key (NodeMCU → backend) ────────────────────────────────────
