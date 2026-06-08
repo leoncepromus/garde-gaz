@@ -1,8 +1,9 @@
 import { useEffect, useState, useCallback } from 'react';
-import { View, Text, StyleSheet, ActivityIndicator } from 'react-native';
+import { View, Text, StyleSheet, ActivityIndicator, TouchableOpacity, Alert } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { THEME } from '../../constants';
 import { fetchIncidents, type Incident } from '../../services/firebase';
+import { api } from '../../services/api';
 import ScreenShell from '../../components/ScreenShell';
 import React from 'react';
 
@@ -10,10 +11,16 @@ export default function IncidentsScreen() {
   const [incidents, setIncidents] = useState<Incident[]>([]);
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
+  const [ackingId, setAckingId] = useState<string | null>(null);
 
   const load = useCallback(async () => {
-    const data = await fetchIncidents(50);
-    setIncidents(data);
+    try {
+      const data = await api.getIncidents(50);
+      setIncidents(data as Incident[]);
+    } catch {
+      const data = await fetchIncidents(50);
+      setIncidents(data);
+    }
     setLoading(false);
     setRefreshing(false);
   }, []);
@@ -39,6 +46,32 @@ export default function IncidentsScreen() {
     if (mins < 1) return '< 1 min';
     if (mins < 60) return `${mins} min`;
     return `${Math.floor(mins / 60)}h ${mins % 60}m`;
+  };
+
+  const handleAcknowledge = (inc: Incident) => {
+    if (!inc.id || inc.acknowledged) return;
+
+    Alert.alert(
+      'Acknowledge incident?',
+      'Stops repeated voice/SMS reminders via the backend.',
+      [
+        { text: 'Cancel', style: 'cancel' },
+        {
+          text: 'Acknowledge',
+          onPress: async () => {
+            setAckingId(inc.id!);
+            try {
+              await api.acknowledgeIncident(inc.id!, 'app');
+              await load();
+            } catch (err) {
+              Alert.alert('Error', err instanceof Error ? err.message : 'Could not acknowledge');
+            } finally {
+              setAckingId(null);
+            }
+          },
+        },
+      ],
+    );
   };
 
   if (loading) {
@@ -131,6 +164,23 @@ export default function IncidentsScreen() {
                   ))}
               </View>
             )}
+
+            {inc.status === 'active' && !inc.acknowledged && inc.id && (
+              <TouchableOpacity
+                style={styles.ackBtn}
+                onPress={() => handleAcknowledge(inc)}
+                disabled={ackingId === inc.id}
+              >
+                {ackingId === inc.id ? (
+                  <ActivityIndicator color="#fff" size="small" />
+                ) : (
+                  <>
+                    <Ionicons name="hand-left-outline" size={16} color="#fff" />
+                    <Text style={styles.ackBtnText}>Acknowledge via backend</Text>
+                  </>
+                )}
+              </TouchableOpacity>
+            )}
           </View>
         ))
       )}
@@ -190,4 +240,10 @@ const styles = StyleSheet.create({
     borderRadius: 6, borderWidth: 1, borderColor: THEME.border,
   },
   actionText: { fontSize: 9, color: THEME.textMuted, fontWeight: '600', letterSpacing: 0.5 },
+  ackBtn: {
+    flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 8,
+    backgroundColor: THEME.primaryDark, borderRadius: 10, paddingVertical: 12,
+    marginTop: 12,
+  },
+  ackBtnText: { color: '#fff', fontSize: 13, fontWeight: '600' },
 });

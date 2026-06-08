@@ -11,7 +11,7 @@ import {
   THEME, GAS_THRESHOLD, APP_NAME, USSD_CODE,
 } from '../../constants';
 import { getCurrentGasLevel } from '../../services/firebase';
-import { api } from '../../services/api';
+import { api, configureApiBaseUrl, sensorPpm } from '../../services/api';
 import ScreenShell from '../../components/ScreenShell';
 import React from 'react';
 
@@ -59,7 +59,7 @@ const DEFAULT_SETTINGS: GasSettings = {
   secondaryNumber: '',
   wifiSsid: '',
   wifiPassword: '',
-  cloudServerUrl: process.env.EXPO_PUBLIC_API_URL ?? 'http://localhost:3000',
+  cloudServerUrl: process.env.EXPO_PUBLIC_API_URL ?? 'https://garde-gaz.onrender.com',
   apiKey: '',
   autoReset: true,
 };
@@ -72,6 +72,11 @@ export default function SettingsScreen() {
 
   const [applyingThresholds, setApplyingThresholds] = useState(false);
   const [testingCall, setTestingCall] = useState(false);
+  const [testingAlert, setTestingAlert] = useState(false);
+  const [testingSafeAlert, setTestingSafeAlert] = useState(false);
+  const [loadingServiceInfo, setLoadingServiceInfo] = useState(false);
+  const [simulatingSensor, setSimulatingSensor] = useState(false);
+  const [serviceInfo, setServiceInfo] = useState<string | null>(null);
   const [syncing, setSyncing] = useState(false);
   const [resetting, setResetting] = useState(false);
   const [intervalModalVisible, setIntervalModalVisible] = useState(false);
@@ -91,6 +96,7 @@ export default function SettingsScreen() {
 
   const persistSettings = async (next: GasSettings) => {
     setSettings(next);
+    configureApiBaseUrl(next.cloudServerUrl);
     await AsyncStorage.setItem(SETTINGS_KEY, JSON.stringify(next));
   };
 
@@ -105,6 +111,7 @@ export default function SettingsScreen() {
       if (!saved) return;
 
       const parsed = { ...DEFAULT_SETTINGS, ...JSON.parse(saved) };
+      configureApiBaseUrl(parsed.cloudServerUrl);
       setSettings(parsed);
       setSafeMax(String(parsed.safeMax ?? DEFAULT_THRESHOLDS.safeMax));
       setWarningMax(String(parsed.warningMax ?? DEFAULT_THRESHOLDS.warningMax));
@@ -149,7 +156,12 @@ export default function SettingsScreen() {
   };
 
   const loadCurrentPpm = async () => {
-    setCurrentPpm(await getCurrentGasLevel());
+    try {
+      const gas = await api.getGas();
+      setCurrentPpm(gas.ppm);
+    } catch {
+      setCurrentPpm(await getCurrentGasLevel());
+    }
   };
 
   const validateThresholds = () => {
@@ -217,15 +229,138 @@ export default function SettingsScreen() {
     }
   };
 
+  const handleTestBackendAlert = async () => {
+    if (backendStatus !== 'online') {
+      Alert.alert('Backend offline', 'Sync with the cloud server first.');
+      return;
+    }
+
+    const ppm = currentPpm !== null && currentPpm >= GAS_THRESHOLD ? currentPpm : 512;
+
+    Alert.alert(
+      'Test backend alert?',
+      `Triggers voice call + SMS via ${api.baseUrl} at ${ppm} ppm.`,
+      [
+        { text: 'Cancel', style: 'cancel' },
+        {
+          text: 'Send test alert',
+          style: 'destructive',
+          onPress: async () => {
+            setTestingAlert(true);
+            try {
+              const result = await api.triggerTestAlert(ppm);
+              const voice = result.call.success ? 'sent' : `failed (${result.call.error ?? 'unknown'})`;
+              const sms = result.sms.success ? 'sent' : `failed (${result.sms.error ?? 'unknown'})`;
+              Alert.alert('Test alert', `Voice: ${voice}\nSMS: ${sms}`);
+            } catch (err) {
+              Alert.alert('Test failed', err instanceof Error ? err.message : 'Could not reach backend');
+            } finally {
+              setTestingAlert(false);
+            }
+          },
+        },
+      ],
+    );
+  };
+
+  const handleTestSafeAlert = async () => {
+    if (backendStatus !== 'online') {
+      Alert.alert('Backend offline', 'Sync with the cloud server first.');
+      return;
+    }
+
+    const ppm = currentPpm ?? 0;
+    setTestingSafeAlert(true);
+    try {
+      const result = await api.triggerSafeAlert(ppm);
+      const status = result.sms.success ? 'sent' : `failed (${result.sms.error ?? 'unknown'})`;
+      Alert.alert('Safe notification', `All-clear SMS: ${status}`);
+    } catch (err) {
+      Alert.alert('Test failed', err instanceof Error ? err.message : 'Could not reach backend');
+    } finally {
+      setTestingSafeAlert(false);
+    }
+  };
+
+  const handleLoadServiceInfo = async () => {
+    setLoadingServiceInfo(true);
+    try {
+      const info = await api.getServiceInfo();
+      setServiceInfo(`${info.service} v${info.version ?? '1.0.0'} · ${info.status}`);
+      setBackendStatus('online');
+      Alert.alert(
+        'GET / — Service info',
+        [
+          `Service: ${info.service}`,
+          `Status: ${info.status}`,
+          `Version: ${info.version ?? '—'}`,
+          `Threshold: ${info.threshold ?? '—'}`,
+          `Docs: ${info.docs ?? api.docsUrl()}`,
+        ].join('\n'),
+      );
+    } catch (err) {
+      setBackendStatus('offline');
+      Alert.alert('Failed', err instanceof Error ? err.message : 'GET / failed');
+    } finally {
+      setLoadingServiceInfo(false);
+    }
+  };
+
+  const handleOpenApiDocs = () => {
+    Linking.openURL(api.docsUrl()).catch(() => {
+      Alert.alert('Error', 'Could not open Swagger UI');
+    });
+  };
+
+  const handleSimulateSensor = async () => {
+    const ppm = currentPpm ?? 120;
+    Alert.alert(
+      'POST /api/sensor',
+      `Send simulated reading (${ppm} ppm) to backend → Firebase?`,
+      [
+        { text: 'Cancel', style: 'cancel' },
+        {
+          text: 'Send',
+          onPress: async () => {
+            setSimulatingSensor(true);
+            try {
+              const result = await api.postSensor(
+                { gasLevel: ppm, ppm, status: ppm >= GAS_THRESHOLD ? 'danger' : 'safe' },
+                settings.apiKey || undefined,
+              );
+              Alert.alert('Sensor ingested', `Saved ${sensorPpm(result.data)} ppm via backend`);
+              await loadCurrentPpm();
+            } catch (err) {
+              Alert.alert('Failed', err instanceof Error ? err.message : 'POST /api/sensor failed');
+            } finally {
+              setSimulatingSensor(false);
+            }
+          },
+        },
+      ],
+    );
+  };
+
   const handleSyncNow = async () => {
     setSyncing(true);
     setSyncStatus(null);
+    configureApiBaseUrl(settings.cloudServerUrl);
     try {
-      const [health, gas] = await Promise.all([api.checkHealth(), api.getGas()]);
+      const [health, gas, sensor] = await Promise.all([
+        api.checkHealth(),
+        api.getGas(),
+        api.getSensor().catch(() => null),
+      ]);
       setBackendStatus('online');
       setCurrentPpm(gas.ppm);
-      setSyncStatus(`Connected · ${gas.ppm} ppm · threshold ${gas.threshold} ppm`);
-      Alert.alert('Sync successful', `Cloud server is reachable.\nCurrent gas: ${gas.ppm} ppm (${gas.status}).`);
+      setSyncStatus(
+        `GET /health · GET /api/gas · ${gas.ppm} ppm (${gas.status})`
+        + (sensor ? ` · sensor ${sensorPpm(sensor)} ppm` : ''),
+      );
+      Alert.alert(
+        'Sync successful',
+        `Health: ${health.status}\nGas: ${gas.ppm} ppm (${gas.status})\nThreshold: ${gas.threshold} ppm`,
+      );
     } catch {
       setBackendStatus('offline');
       setSyncStatus('Connection failed');
@@ -386,11 +521,25 @@ export default function SettingsScreen() {
           placeholder="+250..."
         />
         <ActionButton
-          label="Test call"
+          label="Test call (dialer)"
           icon="call"
           color={THEME.dangerDark}
           loading={testingCall}
           onPress={handleTestCall}
+        />
+        <ActionButton
+          label="Test voice + SMS (POST /api/test-alert)"
+          icon="megaphone-outline"
+          color={THEME.danger}
+          loading={testingAlert}
+          onPress={handleTestBackendAlert}
+        />
+        <ActionButton
+          label="Test safe SMS (POST /api/safe-alert)"
+          icon="checkmark-circle-outline"
+          color={THEME.primaryDark}
+          loading={testingSafeAlert}
+          onPress={handleTestSafeAlert}
         />
       </ColorSection>
 
@@ -422,7 +571,7 @@ export default function SettingsScreen() {
           label="Cloud server URL"
           value={settings.cloudServerUrl}
           onChangeText={(v) => patchSettings({ cloudServerUrl: v })}
-          placeholder="https://your-server.ngrok-free.dev"
+          placeholder="https://garde-gaz.onrender.com"
           autoCapitalize="none"
         />
         <Divider accent="rgba(56, 189, 248, 0.2)" />
@@ -435,13 +584,40 @@ export default function SettingsScreen() {
           autoCapitalize="none"
         />
         {syncStatus ? <Text style={styles.syncHint}>{syncStatus}</Text> : null}
+        {serviceInfo ? <Text style={styles.syncHint}>{serviceInfo}</Text> : null}
         <ActionButton
-          label="Sync now"
+          label="Sync now (GET /health + /api/gas + /api/sensor)"
           icon="sync-outline"
           color={THEME.info}
           textColor={THEME.bg}
           loading={syncing}
           onPress={handleSyncNow}
+        />
+        <ActionButton
+          label="Service info (GET /)"
+          icon="information-circle-outline"
+          color={THEME.surfaceElevated}
+          textColor={THEME.info}
+          borderColor="rgba(56, 189, 248, 0.35)"
+          loading={loadingServiceInfo}
+          onPress={handleLoadServiceInfo}
+        />
+        <ActionButton
+          label="Open Swagger UI (/api/docs)"
+          icon="document-text-outline"
+          color={THEME.surfaceElevated}
+          textColor={THEME.text}
+          borderColor={THEME.border}
+          onPress={handleOpenApiDocs}
+        />
+        <ActionButton
+          label="Simulate sensor (POST /api/sensor)"
+          icon="hardware-chip-outline"
+          color={THEME.surfaceElevated}
+          textColor={THEME.warning}
+          borderColor="rgba(251, 191, 36, 0.35)"
+          loading={simulatingSensor}
+          onPress={handleSimulateSensor}
         />
       </ColorSection>
 
@@ -497,7 +673,7 @@ export default function SettingsScreen() {
       </ColorSection>
 
       <Text style={styles.appInfo}>{APP_NAME} v1.0.0 · Danger threshold ref: {GAS_THRESHOLD} ppm</Text>
-      <Text style={styles.appInfo}>University of Rwanda · 2025–2026</Text>
+      <Text style={styles.appInfo}>Fyp Project Team · 2025–2026</Text>
 
       <Modal visible={intervalModalVisible} transparent animationType="fade">
         <Pressable style={styles.modalOverlay} onPress={() => setIntervalModalVisible(false)}>

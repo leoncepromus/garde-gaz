@@ -3,12 +3,13 @@ import { View, Text, StyleSheet, TouchableOpacity, ActivityIndicator } from 'rea
 import { Ionicons } from '@expo/vector-icons';
 import { THEME, GAS_THRESHOLD } from '../../constants';
 import { fetchHistory } from '../../services/firebase';
+import { api, type HistoryEntry } from '../../services/api';
 import ScreenShell from '../../components/ScreenShell';
 import GasChart from '../../components/GasChart';
 import React from 'react';
 
 type Filter = 'All' | 'Safe' | 'Leak';
-type Reading = { ppm: number; status: 'safe' | 'danger'; timestamp: string };
+type Reading = HistoryEntry;
 
 export default function HistoryScreen() {
   const [readings, setReadings] = useState<Reading[]>([]);
@@ -17,8 +18,13 @@ export default function HistoryScreen() {
   const [filter, setFilter] = useState<Filter>('All');
 
   const load = useCallback(async () => {
-    const data = await fetchHistory(50);
-    setReadings(data as Reading[]);
+    try {
+      const data = await api.getHistory(50);
+      setReadings(data);
+    } catch {
+      const data = await fetchHistory(50);
+      setReadings(data as Reading[]);
+    }
     setLoading(false);
     setRefreshing(false);
   }, []);
@@ -57,7 +63,7 @@ export default function HistoryScreen() {
   return (
     <ScreenShell
       title="History"
-      subtitle={`${readings.length} readings · pull to refresh`}
+      subtitle={`${readings.length} readings · GET /api/history`}
       sensorOnline
       refreshing={refreshing}
       onRefresh={() => { setRefreshing(true); load(); }}

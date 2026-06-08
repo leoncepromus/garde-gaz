@@ -10,6 +10,7 @@ import {
   clearLampRelay,
   type SensorData,
 } from '../../services/firebase';
+import { api } from '../../services/api';
 import ScreenShell from '../../components/ScreenShell';
 import React from 'react';
 
@@ -34,12 +35,16 @@ export default function RelaysScreen() {
   const toggleManualMode = async (enabled: boolean) => {
     setManualMode(enabled);
     if (!enabled) {
-      await clearLampRelay();
+      try {
+        await api.setRelay('auto');
+      } catch {
+        await clearLampRelay();
+      }
       Alert.alert('Auto mode', 'Lamp returns to sensor control. Fan always local.');
     } else {
       Alert.alert(
         'Manual lamp override',
-        'Writes to Firebase /gas/relay. Fan is never controlled remotely (v2.1).',
+        'Sends commands to backend → Firebase /gas/relay. Fan is never controlled remotely (v2.1).',
       );
     }
   };
@@ -56,7 +61,7 @@ export default function RelaysScreen() {
     const next = electricity === 'on' ? 'off' : 'on';
     Alert.alert(
       next === 'off' ? 'Cut electricity?' : 'Restore electricity?',
-      'Sends command to /gas/relay on Firebase.',
+      'Sends command via backend API to /gas/relay.',
       [
         { text: 'Cancel', style: 'cancel' },
         {
@@ -64,10 +69,15 @@ export default function RelaysScreen() {
           onPress: async () => {
             setLoading(true);
             try {
-              await setLampRelay(next);
+              await api.setRelay(next);
               setElectricity(next);
             } catch {
-              Alert.alert('Error', 'Could not write /gas/relay');
+              try {
+                await setLampRelay(next);
+                setElectricity(next);
+              } catch {
+                Alert.alert('Error', 'Could not reach backend or Firebase relay');
+              }
             } finally {
               setLoading(false);
             }

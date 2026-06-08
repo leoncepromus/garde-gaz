@@ -1,4 +1,4 @@
-import { useEffect, useState, useRef } from 'react';
+import { useEffect, useState, useRef, useCallback } from 'react';
 import {
   View, Text, StyleSheet, TouchableOpacity, Linking,
 } from 'react-native';
@@ -13,6 +13,7 @@ import {
   type SensorData,
   type Incident,
 } from '../../services/firebase';
+import { api } from '../../services/api';
 import {
   requestPermission,
   sendLocalLeakAlert,
@@ -35,6 +36,8 @@ export default function Dashboard() {
   const [fan, setFan] = useState<'on' | 'off'>('off');
   const [rssi, setRssi] = useState<number | null>(null);
   const [activeIncident, setActiveIncident] = useState<Incident | null>(null);
+  const [backendOnline, setBackendOnline] = useState<boolean | null>(null);
+  const [apiRefreshing, setApiRefreshing] = useState(false);
 
   const wasLeaking = useRef(false);
   const activeIncidentRef = useRef<Incident | null>(null);
@@ -43,10 +46,51 @@ export default function Dashboard() {
     activeIncidentRef.current = activeIncident;
   }, [activeIncident]);
 
+  const refreshFromBackend = useCallback(async () => {
+    setApiRefreshing(true);
+    try {
+      const [health, gas, sensor] = await Promise.all([
+        api.checkHealth(),
+        api.getGas(),
+        api.getSensor().catch(() => null),
+      ]);
+      setBackendOnline(health.status === 'ok');
+      setPpm(gas.ppm);
+      setIsLeaking(gas.status === 'danger');
+      setSensorOnline(true);
+      setLastUpdated(new Date(gas.timestamp).toLocaleTimeString('en-RW', {
+        timeZone: 'Africa/Kigali',
+        hour: '2-digit', minute: '2-digit', second: '2-digit',
+      }));
+      if (sensor) {
+        if (sensor.electricity) setElectricity(sensor.electricity);
+        if (sensor.fan) setFan(sensor.fan);
+        if (sensor.rssi != null) setRssi(sensor.rssi);
+      }
+    } catch {
+      setBackendOnline(false);
+    } finally {
+      setApiRefreshing(false);
+    }
+  }, []);
+
   useEffect(() => {
     requestPermission();
+    refreshFromBackend();
     return subscribeToActiveIncident(setActiveIncident);
-  }, []);
+  }, [refreshFromBackend]);
+
+  useEffect(() => {
+    if (!isLeaking) return undefined;
+    const refreshIncident = () => {
+      api.getActiveIncident()
+        .then((inc) => { if (inc) setActiveIncident(inc as Incident); })
+        .catch(() => {});
+    };
+    refreshIncident();
+    const timer = setInterval(refreshIncident, 15000);
+    return () => clearInterval(timer);
+  }, [isLeaking]);
 
   useEffect(() => {
     const unsubscribe = subscribeToSensor(async (data: SensorData) => {
@@ -101,9 +145,35 @@ export default function Dashboard() {
   return (
     <ScreenShell
       title="Dashboard"
-      subtitle="Live gas monitoring"
+      subtitle={backendOnline === false
+        ? 'Live sensor · backend offline'
+        : backendOnline
+          ? 'Live gas monitoring · cloud connected'
+          : 'Live gas monitoring'}
       sensorOnline={sensorOnline}
     >
+      {backendOnline !== null && (
+        <TouchableOpacity
+          style={[styles.apiBar, backendOnline ? styles.apiBarOnline : styles.apiBarOffline]}
+          onPress={refreshFromBackend}
+          disabled={apiRefreshing}
+        >
+          <Ionicons
+            name={backendOnline ? 'cloud-done-outline' : 'cloud-offline-outline'}
+            size={16}
+            color={backendOnline ? THEME.primary : THEME.danger}
+          />
+          <Text style={styles.apiBarText}>
+            {apiRefreshing
+              ? 'Syncing GET /api/gas + /api/sensor…'
+              : backendOnline
+                ? `Backend online · ${api.baseUrl}`
+                : 'Backend offline — tap to retry'}
+          </Text>
+          <Ionicons name="refresh" size={14} color={THEME.textMuted} />
+        </TouchableOpacity>
+      )}
+
       {alertStatus === 'resolved' && (
         <View style={styles.resolvedBanner}>
           <Ionicons name="checkmark-circle" size={18} color={THEME.success} />
@@ -134,6 +204,19 @@ export default function Dashboard() {
               : `Active incident — peak ${activeIncident.peakPpm} ppm · tap Alert to acknowledge`}
           </Text>
         </View>
+      )}
+
+      {isLeaking && activeIncident && !activeIncident.acknowledged && (
+        <TouchableOpacity
+          style={styles.ackBanner}
+          onPress={() => router.push('/alert')}
+        >
+          <Ionicons name="hand-left" size={16} color={THEME.primary} />
+          <Text style={styles.ackBannerText}>
+            Tap to acknowledge alert via backend
+          </Text>
+          <Ionicons name="chevron-forward" size={16} color={THEME.primary} />
+        </TouchableOpacity>
       )}
 
       <View style={[styles.banner, isLeaking ? styles.bannerDanger : styles.bannerSafe]}>
@@ -274,6 +357,13 @@ const styles = StyleSheet.create({
     marginBottom: 12, borderWidth: 1, borderColor: THEME.successBorder,
   },
   resolvedText: { fontSize: 13, color: THEME.success, fontWeight: '500' },
+  apiBar: {
+    flexDirection: 'row', alignItems: 'center', gap: 8,
+    padding: 10, borderRadius: 10, marginBottom: 12, borderWidth: 1,
+  },
+  apiBarOnline: { backgroundColor: THEME.primaryGlow, borderColor: THEME.successBorder },
+  apiBarOffline: { backgroundColor: THEME.dangerBg, borderColor: THEME.dangerBorder },
+  apiBarText: { flex: 1, fontSize: 11, color: THEME.textSecondary },
   statusBanner: {
     flexDirection: 'row', alignItems: 'center', gap: 8,
     backgroundColor: THEME.infoBg, padding: 10, borderRadius: 10, marginBottom: 12,
@@ -286,6 +376,12 @@ const styles = StyleSheet.create({
   incidentActive: { backgroundColor: THEME.dangerBg, borderColor: THEME.dangerBorder },
   incidentAcked: { backgroundColor: THEME.successBg, borderColor: THEME.successBorder },
   incidentText: { flex: 1, fontSize: 12, color: THEME.textSecondary, lineHeight: 17 },
+  ackBanner: {
+    flexDirection: 'row', alignItems: 'center', gap: 8,
+    backgroundColor: THEME.primaryGlow, padding: 12, borderRadius: 12,
+    marginBottom: 12, borderWidth: 1, borderColor: THEME.successBorder,
+  },
+  ackBannerText: { flex: 1, fontSize: 12, color: THEME.primary, fontWeight: '600' },
   banner: {
     flexDirection: 'row', alignItems: 'center', gap: 10,
     padding: 14, borderRadius: 12, marginBottom: 16,

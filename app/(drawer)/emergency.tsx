@@ -1,6 +1,10 @@
-import { View, Text, StyleSheet, TouchableOpacity, Linking, Alert } from 'react-native';
+import { useState } from 'react';
+import {
+  View, Text, StyleSheet, TouchableOpacity, Linking, Alert, ActivityIndicator,
+} from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { THEME, USSD_CODE, EMERGENCY_CONTACTS } from '../../constants';
+import { api } from '../../services/api';
 import ScreenShell from '../../components/ScreenShell';
 import React from 'react';
 
@@ -9,9 +13,12 @@ const USSD_STEPS = [
   { key: '2', label: 'Last 3 readings', desc: 'Recent history without internet on phone' },
   { key: '3', label: 'System status', desc: 'Sensor online & cloud connection' },
   { key: '4', label: 'Emergency contacts', desc: 'Primary number, fire 112, police 113' },
+  { key: '5', label: 'Acknowledge alert', desc: 'Stops voice/SMS escalation (when leak active)' },
 ];
 
 export default function EmergencyScreen() {
+  const [ussdLoading, setUssdLoading] = useState<string | null>(null);
+
   const dialUssd = () => {
     Alert.alert(
       `Dial ${USSD_CODE}?`,
@@ -23,6 +30,24 @@ export default function EmergencyScreen() {
     );
   };
 
+  const runUssdOption = async (optionKey: string) => {
+    setUssdLoading(optionKey);
+    try {
+      const response = await api.postUssd({
+        serviceCode: USSD_CODE,
+        text: optionKey,
+      });
+      Alert.alert(`USSD option ${optionKey || 'menu'}`, response.trim());
+    } catch (err) {
+      Alert.alert(
+        'USSD API error',
+        err instanceof Error ? err.message : 'Could not reach POST /ussd on backend',
+      );
+    } finally {
+      setUssdLoading(null);
+    }
+  };
+
   const callContact = (label: string, tel: string) => {
     Alert.alert(`Call ${label}?`, undefined, [
       { text: 'Cancel', style: 'cancel' },
@@ -31,24 +56,43 @@ export default function EmergencyScreen() {
   };
 
   return (
-    <ScreenShell title="USSD & Emergency" subtitle="Offline access & emergency contacts">
+    <ScreenShell title="USSD & Emergency" subtitle="Offline USSD + backend API test">
       <View style={styles.heroCard}>
         <View style={styles.heroIcon}>
           <Ionicons name="keypad" size={32} color={THEME.primary} />
         </View>
         <Text style={styles.heroTitle}>Check gas status offline</Text>
         <Text style={styles.heroSub}>
-          Dial {USSD_CODE} on any phone — no smartphone or internet required
+          Dial {USSD_CODE} on any phone — or test the same menu via POST /ussd below
         </Text>
         <TouchableOpacity style={styles.dialBtn} onPress={dialUssd}>
           <Ionicons name="call" size={18} color={THEME.bg} />
           <Text style={styles.dialBtnText}>Dial {USSD_CODE}</Text>
         </TouchableOpacity>
+        <TouchableOpacity
+          style={styles.apiMenuBtn}
+          onPress={() => runUssdOption('')}
+          disabled={ussdLoading !== null}
+        >
+          {ussdLoading === '' ? (
+            <ActivityIndicator color={THEME.primary} size="small" />
+          ) : (
+            <>
+              <Ionicons name="cloud-outline" size={16} color={THEME.primary} />
+              <Text style={styles.apiMenuBtnText}>Open USSD menu (API)</Text>
+            </>
+          )}
+        </TouchableOpacity>
       </View>
 
-      <Text style={styles.sectionTitle}>USSD MENU OPTIONS</Text>
-      {USSD_STEPS.map(step => (
-        <View key={step.key} style={styles.stepCard}>
+      <Text style={styles.sectionTitle}>USSD MENU — TAP TO CALL POST /ussd</Text>
+      {USSD_STEPS.map((step) => (
+        <TouchableOpacity
+          key={step.key}
+          style={styles.stepCard}
+          onPress={() => runUssdOption(step.key)}
+          disabled={ussdLoading !== null}
+        >
           <View style={styles.stepNum}>
             <Text style={styles.stepNumText}>{step.key}</Text>
           </View>
@@ -56,11 +100,16 @@ export default function EmergencyScreen() {
             <Text style={styles.stepLabel}>{step.label}</Text>
             <Text style={styles.stepDesc}>{step.desc}</Text>
           </View>
-        </View>
+          {ussdLoading === step.key ? (
+            <ActivityIndicator color={THEME.primary} size="small" />
+          ) : (
+            <Ionicons name="play-circle-outline" size={22} color={THEME.primary} />
+          )}
+        </TouchableOpacity>
       ))}
 
       <Text style={styles.sectionTitle}>EMERGENCY CONTACTS</Text>
-      {EMERGENCY_CONTACTS.map(c => (
+      {EMERGENCY_CONTACTS.map((c) => (
         <TouchableOpacity
           key={c.number}
           style={styles.contactCard}
@@ -107,6 +156,12 @@ const styles = StyleSheet.create({
     paddingHorizontal: 24, paddingVertical: 14, marginTop: 20,
   },
   dialBtnText: { fontSize: 16, fontWeight: '700', color: THEME.bg },
+  apiMenuBtn: {
+    flexDirection: 'row', alignItems: 'center', gap: 8,
+    marginTop: 12, paddingVertical: 10, paddingHorizontal: 16,
+    borderRadius: 12, borderWidth: 1, borderColor: THEME.primaryMuted,
+  },
+  apiMenuBtnText: { fontSize: 13, fontWeight: '600', color: THEME.primary },
   sectionTitle: { fontSize: 11, color: THEME.textMuted, letterSpacing: 1, marginBottom: 12, marginTop: 8 },
   stepCard: {
     flexDirection: 'row', alignItems: 'center', gap: 14,

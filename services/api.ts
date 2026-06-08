@@ -1,36 +1,93 @@
 /**
- * Backend API client — used by mobile app for alerts and health checks.
- * Live sensor data comes from Firebase (services/firebase.ts).
+ * GasSafer REST client — mirrors backend OpenAPI (Swagger) endpoints.
+ * Live sensor stream: Firebase (services/firebase.ts).
  */
 
-const API_URL = process.env.EXPO_PUBLIC_API_URL ?? 'http://localhost:3000';
+let apiBaseOverride: string | null = null;
 
-type ChannelResult = {
-  success: boolean;
-  sid?: string;
-  error?: string;
+export function configureApiBaseUrl(url?: string) {
+  const trimmed = url?.trim();
+  apiBaseOverride = trimmed ? trimmed.replace(/\/$/, '') : null;
+}
+
+export function getApiBaseUrl() {
+  return apiBaseOverride ?? process.env.EXPO_PUBLIC_API_URL ?? 'http://localhost:3000';
+}
+
+// ── OpenAPI schemas ─────────────────────────────────────────────────────────
+
+export type ServiceInfo = {
+  service: string;
+  status: string;
+  version?: string;
+  docs?: string;
+  firebase?: string;
+  threshold?: string;
 };
 
-type AlertResult = {
-  call: ChannelResult;
-  sms: ChannelResult;
+export type HealthStatus = {
+  status: string;
+  timestamp: string;
 };
 
-type GasReading = {
+export type GasReading = {
   ppm: number;
   status: 'safe' | 'danger';
   threshold: number;
   timestamp: string;
 };
 
-type ServiceInfo = {
-  service: string;
-  status: string;
-  version?: string;
-  docs?: string;
+export type SensorData = {
+  ppm?: number;
+  gasLevel?: number;
+  status: 'safe' | 'danger';
+  threshold?: number;
+  electricity?: 'on' | 'off';
+  fan?: 'on' | 'off';
+  rssi?: number | null;
+  lastUpdated?: string;
+  updatedAt?: string;
+  timestamp?: string;
 };
 
-type Incident = {
+export type SensorInput = {
+  gasLevel?: number;
+  ppm?: number;
+  status?: 'safe' | 'danger';
+  threshold?: number;
+  electricity?: 'on' | 'off';
+  fan?: 'on' | 'off';
+  rssi?: number;
+};
+
+export type HistoryEntry = {
+  id?: string;
+  ppm: number;
+  status: 'safe' | 'danger';
+  timestamp: string;
+};
+
+export type ChannelResult = {
+  success: boolean;
+  sid?: string;
+  error?: string;
+};
+
+export type AlertResult = {
+  call: ChannelResult;
+  sms: ChannelResult;
+};
+
+export type SafeAlertResult = {
+  sms: ChannelResult;
+};
+
+export type SensorPostResult = {
+  success: boolean;
+  data: SensorData;
+};
+
+export type Incident = {
   id: string;
   type: 'leak';
   peakPpm: number;
@@ -45,8 +102,18 @@ type Incident = {
   notificationsSent?: { channel: string; at: string; success: boolean }[];
 };
 
-async function request<T>(path: string, options?: RequestInit): Promise<T> {
-  const res = await fetch(`${API_URL}${path}`, {
+export type UssdInput = {
+  sessionId?: string;
+  serviceCode?: string;
+  phoneNumber?: string;
+  text?: string;
+};
+
+// ── HTTP helpers ────────────────────────────────────────────────────────────
+
+async function requestJson<T>(path: string, options?: RequestInit): Promise<T> {
+  const base = getApiBaseUrl();
+  const res = await fetch(`${base}${path}`, {
     ...options,
     headers: {
       'Content-Type': 'application/json',
@@ -62,38 +129,113 @@ async function request<T>(path: string, options?: RequestInit): Promise<T> {
   return res.json();
 }
 
+async function requestText(path: string, options?: RequestInit): Promise<string> {
+  const base = getApiBaseUrl();
+  const res = await fetch(`${base}${path}`, options);
+
+  if (!res.ok) {
+    const body = await res.text().catch(() => '');
+    throw new Error(body || `API error ${res.status}`);
+  }
+
+  return res.text();
+}
+
+/** Extract ppm from sensor payload (backend may use ppm or gasLevel). */
+export function sensorPpm(sensor: SensorData): number {
+  return sensor.ppm ?? sensor.gasLevel ?? 0;
+}
+
+// ── API surface (Swagger paths) ─────────────────────────────────────────────
+
 export const api = {
-  baseUrl: API_URL,
+  get baseUrl() {
+    return getApiBaseUrl();
+  },
 
-  checkHealth: (): Promise<ServiceInfo> => request('/'),
+  docsUrl: () => `${getApiBaseUrl()}/api/docs`,
 
-  getGas: (): Promise<GasReading> => request('/api/gas'),
+  /** GET / — Service info */
+  getServiceInfo: (): Promise<ServiceInfo> => requestJson('/'),
 
-  getHistory: (limit = 20) => request(`/api/history?limit=${limit}`),
+  /** GET /health — Health check */
+  checkHealth: (): Promise<HealthStatus> => requestJson('/health'),
 
+  /** GET /api/gas — Current gas level */
+  getGas: (): Promise<GasReading> => requestJson('/api/gas'),
+
+  /** GET /api/sensor — Full sensor state */
+  getSensor: (): Promise<SensorData> => requestJson('/api/sensor'),
+
+  /** POST /api/sensor — Ingest reading (NodeMCU / simulate) */
+  postSensor: (
+    input: SensorInput,
+    sensorApiKey?: string,
+  ): Promise<SensorPostResult> =>
+    requestJson('/api/sensor', {
+      method: 'POST',
+      headers: sensorApiKey ? { 'X-Sensor-Key': sensorApiKey } : undefined,
+      body: JSON.stringify({
+        ...input,
+        gasLevel: input.gasLevel ?? input.ppm,
+        ppm: input.ppm ?? input.gasLevel,
+      }),
+    }),
+
+  /** GET /api/history — Reading history */
+  getHistory: (limit = 20): Promise<HistoryEntry[]> =>
+    requestJson(`/api/history?limit=${limit}`),
+
+  /** POST /api/test-alert — Trigger test alert (voice + SMS) */
   triggerTestAlert: (ppm: number): Promise<AlertResult> =>
-    request('/api/test-alert', {
+    requestJson('/api/test-alert', {
       method: 'POST',
       body: JSON.stringify({ ppm }),
     }),
 
-  triggerSafeAlert: (ppm: number): Promise<{ sms: ChannelResult }> =>
-    request('/api/safe-alert', {
+  /** POST /api/safe-alert — Send all-clear SMS */
+  triggerSafeAlert: (ppm: number): Promise<SafeAlertResult> =>
+    requestJson('/api/safe-alert', {
       method: 'POST',
       body: JSON.stringify({ ppm }),
     }),
 
+  /** POST /ussd — Africa's Talking USSD callback (simulate menu) */
+  postUssd: (input: UssdInput = {}): Promise<string> => {
+    const params = new URLSearchParams();
+    params.set('sessionId', input.sessionId ?? `app-${Date.now()}`);
+    params.set('serviceCode', input.serviceCode ?? '*384*49718#');
+    params.set('phoneNumber', input.phoneNumber ?? '+250796233029');
+    params.set('text', input.text ?? '');
+
+    return requestText('/ussd', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+      body: params.toString(),
+    });
+  },
+
+  /** POST /api/relay — Lamp relay (extension, not in public Swagger tag list) */
+  setRelay: (state: 'on' | 'off' | 'auto'): Promise<{ success: boolean; state: string }> =>
+    requestJson('/api/relay', {
+      method: 'POST',
+      body: JSON.stringify({ state }),
+    }),
+
+  /** GET /api/incidents/active */
   getActiveIncident: (): Promise<Incident | null> =>
-    request('/api/incidents/active'),
+    requestJson('/api/incidents/active'),
 
+  /** GET /api/incidents */
   getIncidents: (limit = 30): Promise<Incident[]> =>
-    request(`/api/incidents?limit=${limit}`),
+    requestJson(`/api/incidents?limit=${limit}`),
 
+  /** POST /api/incidents/:id/ack */
   acknowledgeIncident: (
     id: string,
     channel: 'app' | 'ussd' = 'app',
   ): Promise<{ success: boolean; incident: Incident }> =>
-    request(`/api/incidents/${id}/ack`, {
+    requestJson(`/api/incidents/${id}/ack`, {
       method: 'POST',
       body: JSON.stringify({ channel, by: 'mobile-user' }),
     }),

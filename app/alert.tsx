@@ -5,7 +5,7 @@ import {
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { router } from 'expo-router';
-import { THEME, GAS_THRESHOLD } from '../constants';
+import { THEME, GAS_THRESHOLD, USSD_CODE } from '../constants';
 import { subscribeToGasLevel, subscribeToActiveIncident, type Incident } from '../services/firebase';
 import { api } from '../services/api';
 import React from 'react';
@@ -79,11 +79,11 @@ export default function AlertScreen() {
               await api.acknowledgeIncident(incident.id!, 'app');
               Alert.alert(
                 'Acknowledged',
-                'Escalation stopped. USSD users can also ack via *131# → 5.',
+                `Escalation stopped. USSD users can also ack via ${USSD_CODE} → 5.`,
                 [{ text: 'OK', onPress: () => router.back() }],
               );
             } catch {
-              Alert.alert('Error', 'Could not send acknowledgment. Try USSD *131# → 5.');
+              Alert.alert('Error', `Could not send acknowledgment. Try USSD ${USSD_CODE} → 5.`);
             } finally {
               setAcking(false);
             }
@@ -169,7 +169,7 @@ export default function AlertScreen() {
             </View>
           );
         })}
-        <Text style={styles.ussdHint}>No smartphone? Dial *131# → 5 to acknowledge.</Text>
+        <Text style={styles.ussdHint}>No smartphone? Dial {USSD_CODE} → 5 to acknowledge.</Text>
       </View>
 
       <TouchableOpacity style={styles.callBtn} onPress={handleCall}>
